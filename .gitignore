@@ -1,0 +1,31 @@
+# ==============================================================================
+# Git Ignore Configuration for Soundhar Portfolio - Backend API
+# ==============================================================================
+
+# Environment variables & secrets (CRITICAL)
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+package-lock.json.bak
+
+# Dynamic runtime uploads (keeps default seeded static assets)
+uploads/pdf-*
+uploads/img-*
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor and OS directories
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
