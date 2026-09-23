@@ -18,7 +18,7 @@ connectDB().then(() => {
 
 // Middlewares
 app.use(cors({
-  origin: '*', // Allow all origins for development and deployment flexibility
+  origin: true, // Mirrors the requesting origin to fully comply with browser credentials security
   credentials: true
 }));
 app.use(express.json());
