@@ -3,21 +3,8 @@ const path = require('path');
 const Project = require('../models/Project');
 const Certificate = require('../models/Certificate');
 
-// Generate sample certificate SVG/PNG or minimal valid PDF if not present
-const createInitialCertificateAssets = () => {
-  const uploadsDir = path.join(__dirname, '..', 'uploads');
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-
-  const certImgPath = path.join(uploadsDir, 'udemy-c-developer-certificate.png');
-  const certPdfPath = path.join(uploadsDir, 'udemy-c-developer-certificate.pdf');
-
-  // If image does not exist, create a clean certificate PNG placeholder / SVG base
-  if (!fs.existsSync(certImgPath)) {
-    // We can write an SVG or minimal valid PNG buffer
-    // A clean SVG wrapped or 1x1 png or high-res base64 PNG
-    const svgCert = `<svg width="1000" height="700" viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+const getSampleCertSvg = () => {
+  return `<svg width="1000" height="700" viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#0f172a" />
@@ -72,14 +59,10 @@ const createInitialCertificateAssets = () => {
     <text x="0" y="22" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" fill="#38bdf8">Udemy Inc.</text>
   </g>
 </svg>`;
-    // Save SVG file and PNG copy
-    fs.writeFileSync(path.join(uploadsDir, 'udemy-c-developer-certificate.svg'), svgCert);
-    fs.writeFileSync(certImgPath, svgCert); // Modern browsers render SVG seamlessly even with image tag
-  }
+};
 
-  // Create minimal valid PDF if not present
-  if (!fs.existsSync(certPdfPath)) {
-    const minimalPdf = `%PDF-1.4
+const getSampleCertPdf = () => {
+  return `%PDF-1.4
 1 0 obj
 << /Type /Catalog /Pages 2 0 R >>
 endobj
@@ -128,6 +111,29 @@ trailer
 startxref
 654
 %%EOF`;
+};
+
+// Generate sample certificate SVG/PNG or minimal valid PDF if not present
+const createInitialCertificateAssets = () => {
+  const uploadsDir = path.join(__dirname, '..', 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  const certImgPath = path.join(uploadsDir, 'udemy-c-developer-certificate.png');
+  const certPdfPath = path.join(uploadsDir, 'udemy-c-developer-certificate.pdf');
+  const certSvgPath = path.join(uploadsDir, 'udemy-c-developer-certificate.svg');
+
+  const svgCert = getSampleCertSvg();
+  const minimalPdf = getSampleCertPdf();
+
+  if (!fs.existsSync(certSvgPath)) {
+    fs.writeFileSync(certSvgPath, svgCert);
+  }
+  if (!fs.existsSync(certImgPath)) {
+    fs.writeFileSync(certImgPath, svgCert);
+  }
+  if (!fs.existsSync(certPdfPath)) {
     fs.writeFileSync(certPdfPath, minimalPdf);
   }
 };
@@ -135,6 +141,9 @@ startxref
 const seedInitialData = async () => {
   try {
     createInitialCertificateAssets();
+
+    const svgCert = getSampleCertSvg();
+    const minimalPdf = getSampleCertPdf();
 
     // Seed Initial Project if empty
     const projectCount = await Project.countDocuments();
@@ -154,14 +163,48 @@ const seedInitialData = async () => {
     // Seed Initial Certificate if empty
     const certCount = await Certificate.countDocuments();
     if (certCount === 0) {
-      await Certificate.create({
+      const seedCert = new Certificate({
         certificateTitle: 'The Complete C Developer Course',
         organization: 'Udemy',
         date: 'January 30, 2024',
-        pdfUrl: '/uploads/udemy-c-developer-certificate.pdf',
-        imageUrl: '/uploads/udemy-c-developer-certificate.svg'
+        pdfData: {
+          data: Buffer.from(minimalPdf),
+          contentType: 'application/pdf',
+          originalName: 'udemy-c-developer-certificate.pdf',
+          size: Buffer.byteLength(minimalPdf)
+        },
+        imageData: {
+          data: Buffer.from(svgCert),
+          contentType: 'image/svg+xml',
+          originalName: 'udemy-c-developer-certificate.svg',
+          size: Buffer.byteLength(svgCert)
+        }
       });
-      console.log('[Seed] Initial certificate "The Complete C Developer Course" seeded successfully.');
+      seedCert.pdfUrl = `/api/certificates/${seedCert._id}/file/pdf`;
+      seedCert.imageUrl = `/api/certificates/${seedCert._id}/file/image`;
+      await seedCert.save();
+      console.log('[Seed] Initial certificate "The Complete C Developer Course" seeded with permanent database buffers.');
+    } else {
+      // If initial Udemy certificate exists but lacks buffer data, upgrade it
+      const existingUdemy = await Certificate.findOne({ certificateTitle: 'The Complete C Developer Course' });
+      if (existingUdemy && (!existingUdemy.pdfData || !existingUdemy.pdfData.data)) {
+        existingUdemy.pdfData = {
+          data: Buffer.from(minimalPdf),
+          contentType: 'application/pdf',
+          originalName: 'udemy-c-developer-certificate.pdf',
+          size: Buffer.byteLength(minimalPdf)
+        };
+        existingUdemy.imageData = {
+          data: Buffer.from(svgCert),
+          contentType: 'image/svg+xml',
+          originalName: 'udemy-c-developer-certificate.svg',
+          size: Buffer.byteLength(svgCert)
+        };
+        existingUdemy.pdfUrl = `/api/certificates/${existingUdemy._id}/file/pdf`;
+        existingUdemy.imageUrl = `/api/certificates/${existingUdemy._id}/file/image`;
+        await existingUdemy.save();
+        console.log('[Seed] Existing Udemy certificate upgraded with permanent database buffers.');
+      }
     }
   } catch (error) {
     console.error('[Seed] Error during seeding:', error.message);

@@ -24,6 +24,18 @@ const certificateSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  pdfData: {
+    data: Buffer,
+    contentType: String,
+    originalName: String,
+    size: Number
+  },
+  imageData: {
+    data: Buffer,
+    contentType: String,
+    originalName: String,
+    size: Number
+  },
   createdAt: {
     type: Date,
     default: Date.now

@@ -2,7 +2,7 @@ const Certificate = require('../models/Certificate');
 const fs = require('fs');
 const path = require('path');
 
-// Helper to remove file from disk safely
+// Helper to remove legacy file from disk safely if present
 const safelyDeleteFile = (fileUrl) => {
   if (!fileUrl || !fileUrl.startsWith('/uploads/')) return;
   try {
@@ -16,16 +16,48 @@ const safelyDeleteFile = (fileUrl) => {
   }
 };
 
+// Helper to format certificate response (exclude heavy binary data from list/detail JSON)
+const formatCertificate = (cert) => {
+  const obj = cert.toObject ? cert.toObject() : { ...cert };
+  
+  const hasPdfBuffer = Boolean(obj.pdfData && obj.pdfData.data);
+  const hasImageBuffer = Boolean(obj.imageData && obj.imageData.data);
+
+  const pdfUrl = hasPdfBuffer
+    ? `/api/certificates/${obj._id}/file/pdf`
+    : (obj.pdfUrl || '');
+
+  const imageUrl = hasImageBuffer
+    ? `/api/certificates/${obj._id}/file/image`
+    : (obj.imageUrl || '');
+
+  delete obj.pdfData;
+  delete obj.imageData;
+
+  return {
+    ...obj,
+    pdfUrl,
+    imageUrl,
+    hasPdf: Boolean(hasPdfBuffer || pdfUrl),
+    hasImage: Boolean(hasImageBuffer || imageUrl)
+  };
+};
+
 // @desc    Get all certificates
 // @route   GET /api/certificates
 // @access  Public
 const getCertificates = async (req, res) => {
   try {
-    const certificates = await Certificate.find().sort({ createdAt: -1 });
+    const certificates = await Certificate.find()
+      .select('-pdfData.data -imageData.data')
+      .sort({ createdAt: -1 });
+
+    const formattedCertificates = certificates.map(cert => formatCertificate(cert));
+
     return res.status(200).json({
       success: true,
-      count: certificates.length,
-      data: certificates
+      count: formattedCertificates.length,
+      data: formattedCertificates
     });
   } catch (error) {
     console.error('Error fetching certificates:', error);
@@ -38,13 +70,80 @@ const getCertificates = async (req, res) => {
 // @access  Public
 const getCertificateById = async (req, res) => {
   try {
-    const certificate = await Certificate.findById(req.params.id);
+    const certificate = await Certificate.findById(req.params.id)
+      .select('-pdfData.data -imageData.data');
+
     if (!certificate) {
       return res.status(404).json({ success: false, message: 'Certificate not found' });
     }
-    return res.status(200).json({ success: true, data: certificate });
+
+    return res.status(200).json({
+      success: true,
+      data: formatCertificate(certificate)
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error retrieving certificate' });
+  }
+};
+
+// @desc    Stream certificate file (PDF or Image) directly from persistent MongoDB storage
+// @route   GET /api/certificates/:id/file/:type
+// @access  Public
+const getCertificateFile = async (req, res) => {
+  try {
+    const { id, type } = req.params;
+    const certificate = await Certificate.findById(id);
+
+    if (!certificate) {
+      return res.status(404).send('Certificate not found');
+    }
+
+    if (type === 'pdf') {
+      if (certificate.pdfData && certificate.pdfData.data) {
+        res.set({
+          'Content-Type': certificate.pdfData.contentType || 'application/pdf',
+          'Content-Disposition': `inline; filename="${certificate.pdfData.originalName || 'certificate.pdf'}"`,
+          'Cache-Control': 'public, max-age=31536000, immutable'
+        });
+        return res.send(certificate.pdfData.data);
+      }
+
+      // Fallback for legacy disk files
+      if (certificate.pdfUrl && certificate.pdfUrl.startsWith('/uploads/')) {
+        const filePath = path.join(__dirname, '..', certificate.pdfUrl);
+        if (fs.existsSync(filePath)) {
+          return res.sendFile(filePath);
+        }
+      }
+
+      return res.status(404).send('PDF file not found');
+    }
+
+    if (type === 'image') {
+      if (certificate.imageData && certificate.imageData.data) {
+        res.set({
+          'Content-Type': certificate.imageData.contentType || 'image/png',
+          'Content-Disposition': `inline; filename="${certificate.imageData.originalName || 'certificate.png'}"`,
+          'Cache-Control': 'public, max-age=31536000, immutable'
+        });
+        return res.send(certificate.imageData.data);
+      }
+
+      // Fallback for legacy disk files
+      if (certificate.imageUrl && certificate.imageUrl.startsWith('/uploads/')) {
+        const filePath = path.join(__dirname, '..', certificate.imageUrl);
+        if (fs.existsSync(filePath)) {
+          return res.sendFile(filePath);
+        }
+      }
+
+      return res.status(404).send('Image file not found');
+    }
+
+    return res.status(400).send('Invalid file type requested');
+  } catch (error) {
+    console.error('Error serving certificate file:', error);
+    return res.status(500).send('Error retrieving certificate file');
   }
 };
 
@@ -62,30 +161,41 @@ const createCertificate = async (req, res) => {
       });
     }
 
-    let pdfUrl = '';
-    let imageUrl = '';
+    const certificate = new Certificate({
+      certificateTitle: certificateTitle.trim(),
+      organization: organization.trim(),
+      date: date.trim()
+    });
 
     if (req.files) {
       if (req.files.pdf && req.files.pdf.length > 0) {
-        pdfUrl = `/uploads/${req.files.pdf[0].filename}`;
+        const pdf = req.files.pdf[0];
+        certificate.pdfData = {
+          data: pdf.buffer,
+          contentType: pdf.mimetype || 'application/pdf',
+          originalName: pdf.originalname,
+          size: pdf.size
+        };
+        certificate.pdfUrl = `/api/certificates/${certificate._id}/file/pdf`;
       }
       if (req.files.image && req.files.image.length > 0) {
-        imageUrl = `/uploads/${req.files.image[0].filename}`;
+        const image = req.files.image[0];
+        certificate.imageData = {
+          data: image.buffer,
+          contentType: image.mimetype || 'image/png',
+          originalName: image.originalname,
+          size: image.size
+        };
+        certificate.imageUrl = `/api/certificates/${certificate._id}/file/image`;
       }
     }
 
-    const certificate = await Certificate.create({
-      certificateTitle: certificateTitle.trim(),
-      organization: organization.trim(),
-      date: date.trim(),
-      pdfUrl,
-      imageUrl
-    });
+    await certificate.save();
 
     return res.status(201).json({
       success: true,
       message: 'Certificate added successfully',
-      data: certificate
+      data: formatCertificate(certificate)
     });
   } catch (error) {
     console.error('Error creating certificate:', error);
@@ -105,42 +215,54 @@ const updateCertificate = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Certificate not found' });
     }
 
-    const updateData = {};
-    if (certificateTitle) updateData.certificateTitle = certificateTitle.trim();
-    if (organization) updateData.organization = organization.trim();
-    if (date) updateData.date = date.trim();
+    if (certificateTitle) certificate.certificateTitle = certificateTitle.trim();
+    if (organization) certificate.organization = organization.trim();
+    if (date) certificate.date = date.trim();
 
-    // Handle new uploaded files
+    // Handle new uploaded files into MongoDB buffers
     if (req.files) {
       if (req.files.pdf && req.files.pdf.length > 0) {
         safelyDeleteFile(certificate.pdfUrl);
-        updateData.pdfUrl = `/uploads/${req.files.pdf[0].filename}`;
+        const pdf = req.files.pdf[0];
+        certificate.pdfData = {
+          data: pdf.buffer,
+          contentType: pdf.mimetype || 'application/pdf',
+          originalName: pdf.originalname,
+          size: pdf.size
+        };
+        certificate.pdfUrl = `/api/certificates/${certificate._id}/file/pdf`;
       }
       if (req.files.image && req.files.image.length > 0) {
         safelyDeleteFile(certificate.imageUrl);
-        updateData.imageUrl = `/uploads/${req.files.image[0].filename}`;
+        const image = req.files.image[0];
+        certificate.imageData = {
+          data: image.buffer,
+          contentType: image.mimetype || 'image/png',
+          originalName: image.originalname,
+          size: image.size
+        };
+        certificate.imageUrl = `/api/certificates/${certificate._id}/file/image`;
       }
     }
 
     // Handle removal flags if specified
     if (removePdf === 'true' || removePdf === true) {
       safelyDeleteFile(certificate.pdfUrl);
-      updateData.pdfUrl = '';
+      certificate.pdfData = undefined;
+      certificate.pdfUrl = '';
     }
     if (removeImage === 'true' || removeImage === true) {
       safelyDeleteFile(certificate.imageUrl);
-      updateData.imageUrl = '';
+      certificate.imageData = undefined;
+      certificate.imageUrl = '';
     }
 
-    certificate = await Certificate.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-      runValidators: true
-    });
+    await certificate.save();
 
     return res.status(200).json({
       success: true,
       message: 'Certificate updated successfully',
-      data: certificate
+      data: formatCertificate(certificate)
     });
   } catch (error) {
     console.error('Error updating certificate:', error);
@@ -158,7 +280,7 @@ const deleteCertificate = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Certificate not found' });
     }
 
-    // Safely delete associated media files
+    // Safely delete associated legacy disk files if any
     safelyDeleteFile(certificate.pdfUrl);
     safelyDeleteFile(certificate.imageUrl);
 
@@ -177,6 +299,7 @@ const deleteCertificate = async (req, res) => {
 module.exports = {
   getCertificates,
   getCertificateById,
+  getCertificateFile,
   createCertificate,
   updateCertificate,
   deleteCertificate
