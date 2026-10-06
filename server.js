@@ -27,10 +27,23 @@ app.use(express.urlencoded({ extended: true }));
 // Serve static uploads
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Routes
+// URL cleanup middleware: handles accidental duplicate prefixes like /api/api/...
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api/api/')) {
+    req.url = req.url.replace('/api/api/', '/api/');
+  }
+  next();
+});
+
+// Routes (supports both /api/auth and /auth)
 app.use('/api/auth', authRoutes);
+app.use('/auth', authRoutes);
+
 app.use('/api/projects', projectRoutes);
+app.use('/projects', projectRoutes);
+
 app.use('/api/certificates', certificateRoutes);
+app.use('/certificates', certificateRoutes);
 
 // Root status endpoint
 app.get('/', (req, res) => {
