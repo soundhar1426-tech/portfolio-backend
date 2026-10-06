@@ -32,6 +32,17 @@ app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/certificates', certificateRoutes);
 
+// Root status endpoint
+app.get('/', (req, res) => {
+  res.json({
+    status: 'online',
+    message: 'Soundhar Portfolio Backend API is running successfully.',
+    portfolioOwner: 'Soundhar D M',
+    role: 'MERN Stack Developer',
+    healthCheck: '/api/health'
+  });
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
